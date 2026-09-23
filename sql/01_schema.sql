@@ -36,6 +36,14 @@ CREATE TABLE IF NOT EXISTS dss_licences.ref_type_licence (
     valide        boolean      NOT NULL DEFAULT true
 );
 
+-- Profils utilisateur Dataiku (userProfile). exige_licence = false : le profil
+-- ne consomme pas de licence (ex. NONE), un compte sans groupe de licence est normal.
+CREATE TABLE IF NOT EXISTS dss_licences.ref_profil (
+    profil         varchar(50)  PRIMARY KEY,
+    libelle        varchar(200),
+    exige_licence  boolean      NOT NULL DEFAULT true
+);
+
 -- Catalogue des anomalies détectées par l'extraction
 CREATE TABLE IF NOT EXISTS dss_licences.ref_anomalie (
     code_anomalie  varchar(50)  PRIMARY KEY,

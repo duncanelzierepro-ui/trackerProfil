@@ -34,7 +34,7 @@ COLONNES = {
 
 
 def normalise(txt):
-    """Pour comparer 'Designer' / 'DESIGNER' / 'Data_Scientist' / 'DATA_SCIENTIST'."""
+    """Pour comparer 'Designer' / 'DESIGNER' / 'Platform_Admin' / 'PLATFORM ADMIN'."""
     return "".join(c for c in str(txt).upper() if c.isalnum())
 
 
@@ -62,14 +62,14 @@ def analyse_groupes(groups, alias_ads):
     return licences
 
 
-def detecte_anomalies(actif, profil, licences, ads_connues, types_valides):
+def detecte_anomalies(actif, profil, licences, ads_connues, types_valides, profils_sans_licence):
     """Codes d'anomalie (cf. table ref_anomalie)."""
     proprietaires = {ads for ads, _ in licences}
     types_licence = {t for _, t in licences}
     anomalies = []
     if actif:
         # Contrôles de cohérence uniquement pour les comptes actifs
-        if not licences:
+        if not licences and normalise(profil) not in profils_sans_licence:
             anomalies.append("SANS_LICENCE")
         if len(proprietaires) > 1:
             anomalies.append("MULTI_ADS")
@@ -92,10 +92,13 @@ def lire_referentiels(executor):
     ads = executor.query_to_df(f"SELECT code_ads FROM {SCHEMA_PG}.ref_ads")
     types = executor.query_to_df(
         f"SELECT type_licence FROM {SCHEMA_PG}.ref_type_licence WHERE valide")
+    sans_licence = executor.query_to_df(
+        f"SELECT profil FROM {SCHEMA_PG}.ref_profil WHERE NOT exige_licence")
     alias_ads = {str(a).upper(): str(c).upper() for a, c in zip(alias["alias"], alias["code_ads"])}
     ads_connues = {str(c).upper() for c in ads["code_ads"]} - {ADS_NON_ATTRIBUE}
     types_valides = {normalise(t) for t in types["type_licence"]}
-    return alias_ads, ads_connues, types_valides
+    profils_sans_licence = {normalise(p) for p in sans_licence["profil"]}
+    return alias_ads, ads_connues, types_valides, profils_sans_licence
 
 
 def dernieres_connexions(client):
@@ -132,7 +135,7 @@ client = dataiku.api_client()
 executor = SQLExecutor2(connection=CONNEXION_PG)
 
 date_extraction = pd.Timestamp.now(tz=FUSEAU).date()
-alias_ads, ads_connues, types_valides = lire_referentiels(executor)
+alias_ads, ads_connues, types_valides, profils_sans_licence = lire_referentiels(executor)
 activites = dernieres_connexions(client)
 
 lignes = {nom: [] for nom in COLONNES}
@@ -153,7 +156,8 @@ for u in client.list_users():
     jours = (date_extraction - reference).days if reference else None
 
     licences = analyse_groupes(groups, alias_ads)
-    anomalies = detecte_anomalies(bool(actif), profil, licences, ads_connues, types_valides)
+    anomalies = detecte_anomalies(bool(actif), profil, licences, ads_connues, types_valides,
+                                  profils_sans_licence)
 
     lignes["stg_utilisateur"].append({
         "date_extraction": d,

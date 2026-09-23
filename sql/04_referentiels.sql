@@ -9,7 +9,7 @@ INSERT INTO dss_licences.ref_parametre (cle, valeur, description) VALUES
 ON CONFLICT (cle) DO NOTHING;
 
 INSERT INTO dss_licences.ref_anomalie (code_anomalie, libelle, gravite) VALUES
-    ('SANS_LICENCE',           'Compte actif sans groupe de licence',              3),
+    ('SANS_LICENCE',           'Compte actif sans groupe de licence (profil soumis à licence)', 3),
     ('MULTI_ADS',              'Plusieurs ADS propriétaires',                      2),
     ('MULTI_TYPE',             'Plusieurs types de licence',                       2),
     ('PROFIL_DIFFERENT',       'Profil différent du groupe de licence',            2),
@@ -33,14 +33,25 @@ INSERT INTO dss_licences.ref_ads_alias (alias, code_ads) VALUES
     ('AAE-CDSIA', 'AAE_CSDIA')
 ON CONFLICT (alias) DO NOTHING;
 
--- Types de licence : AUCUNE est obligatoire (valide = false, ce n'est pas une licence)
+-- Types de licence (suffixe des groupes <ADS>_licences_<TYPE>)
+-- AUCUNE est obligatoire (valide = false, ce n'est pas une licence)
 INSERT INTO dss_licences.ref_type_licence (type_licence, libelle, valide) VALUES
-    ('AUCUNE',         'Aucune licence', false),
-    ('DESIGNER',       'Designer',       true),
-    ('DATA_SCIENTIST', 'Data Scientist', true)
-    -- À COMPLÉTER selon votre contrat DSS 14, par ex. :
-    -- , ('READER', 'Reader', true), ('AI_CONSUMER', 'AI Consumer', true)
+    ('AUCUNE',   'Aucune licence', false),
+    ('DESIGNER', 'Designer',       true),
+    ('EXPLORER', 'Explorer',       true),
+    ('READER',   'Reader',         true)
 ON CONFLICT (type_licence) DO NOTHING;
+
+-- Profils attribuables dans Dataiku. Un compte NONE n'a pas besoin de groupe
+-- de licence. PLATFORM_ADMIN : passer exige_licence à false si les comptes
+-- d'administration ne sont rattachés à aucune ADS.
+INSERT INTO dss_licences.ref_profil (profil, libelle, exige_licence) VALUES
+    ('DESIGNER',       'Designer',       true),
+    ('EXPLORER',       'Explorer',       true),
+    ('READER',         'Reader',         true),
+    ('PLATFORM_ADMIN', 'Platform admin', true),
+    ('NONE',           'Aucun profil',   false)
+ON CONFLICT (profil) DO NOTHING;
 
 -- Droits Qlik (section access) : user_id tel qu'il apparaît dans Qlik (DOMAINE\login)
 -- INSERT INTO dss_licences.ref_acces_qlik (user_id, code_ads, role) VALUES

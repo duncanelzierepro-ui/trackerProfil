@@ -137,6 +137,13 @@ LOAD
     valide                          AS type_licence_valide;
 SQL SELECT type_licence, libelle, valide::int AS valide FROM $(vSchema).ref_type_licence;
 
+D_PROFIL:
+LOAD
+    profil,
+    libelle                         AS profil_libelle,
+    exige_licence                   AS profil_exige_licence;
+SQL SELECT profil, libelle, exige_licence::int AS exige_licence FROM $(vSchema).ref_profil;
+
 D_ANOMALIE:
 LOAD
     code_anomalie,

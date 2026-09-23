@@ -34,7 +34,10 @@ recette extraction_licences ──►  stg_*  ── p_charger_snapshot() ──
   - `fait_groupe_mois` : un groupe par ligne ;
   - `fait_anomalie_mois` : une anomalie par ligne.
 - **Dimensions et référentiels** : `dim_utilisateur`, `ref_ads`, `ref_ads_alias`,
-  `ref_type_licence`, `ref_anomalie`, `ref_parametre`, `ref_acces_qlik`.
+  `ref_type_licence`, `ref_profil`, `ref_anomalie`, `ref_parametre`, `ref_acces_qlik`.
+- **Type de licence et profil** : un groupe `AAE_CSDIA_licences_DESIGNER` indique l'ADS qui détient
+  la licence (`code_ads`) et le type de licence (`type_licence`). Le profil vient du compte
+  Dataiku (Designer, Explorer, Reader, None, Platform admin). Les deux doivent correspondre.
 - **RGPD** : les données nominatives sont supprimées au-delà de `retention_mois` (6).
   `agg_licence_mois` ne contient aucune donnée personnelle et est conservé pour les tendances longues.
 
@@ -42,7 +45,7 @@ Anomalies détectées (voir `ref_anomalie`) :
 
 | Code | Condition |
 |---|---|
-| `SANS_LICENCE` | Compte actif sans groupe de licence |
+| `SANS_LICENCE` | Compte actif sans groupe de licence, alors que son profil en exige une (`ref_profil.exige_licence`, faux pour NONE) |
 | `MULTI_ADS` | Plusieurs ADS propriétaires |
 | `MULTI_TYPE` | Plusieurs types de licence |
 | `PROFIL_DIFFERENT` | Profil DSS différent du type porté par le groupe |
@@ -58,8 +61,9 @@ Exécuter dans l'ordre `sql/01_schema.sql`, `02_procedures.sql`, `03_vues.sql` e
 `04_referentiels.sql`, avec un compte propriétaire du schéma (PostgreSQL 11 ou plus, pour
 `CALL`). Ensuite :
 
-- compléter `ref_ads` (libellé, direction, responsable), `ref_type_licence` (types de votre
-  contrat DSS 14) et `ref_acces_qlik` (droits Qlik) ;
+- compléter `ref_ads` (libellé, direction, responsable) et `ref_acces_qlik` (droits Qlik) ;
+  vérifier `ref_type_licence` (DESIGNER, EXPLORER, READER) et `ref_profil` (dont
+  `exige_licence` pour PLATFORM_ADMIN) ;
 - donner au compte de la connexion Dataiku les droits `USAGE, CREATE` sur le schéma,
   `SELECT, INSERT, UPDATE, DELETE` sur les tables et `EXECUTE` sur les procédures ;
 - donner au compte Qlik le droit `SELECT` sur les vues `v_qlik_*`, `dim_utilisateur`,

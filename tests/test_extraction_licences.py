@@ -38,21 +38,24 @@ UTILISATEURS = [
     {"login": "alice", "displayName": "Alice", "email": "alice@x.fr", "userProfile": "DESIGNER",
      "enabled": True, "groups": ["AAE_CSDIA_licences_DESIGNER", "readers"], "creationDate": ms(400)},
     # Alias + deux ADS dont une inconnue + deux types
-    {"login": "bob", "displayName": "O'Brien", "userProfile": "DATA_SCIENTIST", "enabled": True,
-     "groups": ["CNDAAE_licences_Designer", "AUTRE_licences_DATA_SCIENTIST"], "creationDate": ms(50)},
+    {"login": "bob", "displayName": "O'Brien", "userProfile": "EXPLORER", "enabled": True,
+     "groups": ["CNDAAE_licences_Designer", "AUTRE_licences_EXPLORER"], "creationDate": ms(50)},
     # Sans licence, jamais connecté, créé il y a 200 jours
     {"login": "carol", "userProfile": "DESIGNER", "enabled": True, "groups": [], "creationDate": ms(200)},
     # Désactivé avec licence
     {"login": "dave", "userProfile": "DESIGNER", "enabled": False,
      "groups": ["AAE_CSDIA_licences_DESIGNER"], "creationDate": ms(300)},
     # Type non valide, dormant (100 jours)
-    {"login": "eve", "userProfile": "READER", "enabled": True,
-     "groups": ["AAE_CSDIA_licences_READER"], "creationDate": ms(365)},
+    {"login": "eve", "userProfile": "ANALYST", "enabled": True,
+     "groups": ["AAE_CSDIA_licences_ANALYST"], "creationDate": ms(365)},
     # Profil différent du groupe
-    {"login": "frank", "userProfile": "DESIGNER", "enabled": True,
-     "groups": ["AAE_CSDIA_licences_DATA_SCIENTIST"], "creationDate": ms(30)},
+    {"login": "frank", "userProfile": "Designer", "enabled": True,
+     "groups": ["AAE_CSDIA_licences_READER"], "creationDate": ms(30)},
+    # Profil NONE sans groupe : ne consomme pas de licence, aucune anomalie
+    {"login": "gus", "userProfile": "NONE", "enabled": True, "groups": ["readers"],
+     "creationDate": ms(40)},
 ]
-ACTIVITES = {"alice": il_y_a(10), "bob": il_y_a(1), "dave": il_y_a(250),
+ACTIVITES = {"alice": il_y_a(10), "bob": il_y_a(1), "dave": il_y_a(250), "gus": il_y_a(3),
              "eve": il_y_a(100), "frank": il_y_a(5)}
 
 
@@ -93,7 +96,7 @@ def test_chargement_et_anomalies():
     assert sql("SELECT nom FROM dss_licences.dim_utilisateur WHERE login = 'bob'") == [("O'Brien",)]
 
     vue = dict(sql("SELECT login, est_inactif FROM dss_licences.v_qlik_utilisateur_mois"))
-    assert vue == {"alice": 0, "bob": 0, "carol": 1, "dave": 0, "eve": 1, "frank": 0}
+    assert vue == {"alice": 0, "bob": 0, "carol": 1, "dave": 0, "eve": 1, "frank": 0, "gus": 0}
     assert sql("SELECT jours_sans_connexion FROM dss_licences.fait_utilisateur_mois "
                "WHERE login = 'carol'") == [(200,)]
 
@@ -104,13 +107,13 @@ def test_chargement_et_anomalies():
     acces = sql("SELECT userid, code_ads FROM dss_licences.v_qlik_acces")
     assert {c for u, c in acces if u == "DOM\\ADMIN"} == {"AAE_CSDIA", "AUTRE", "NON_ATTRIBUE"}
     assert {c for u, c in acces if u == "DOM\\RESP"} == {"AAE_CSDIA"}
-    assert len(sql("SELECT * FROM dss_licences.v_etat_courant")) == 6
+    assert len(sql("SELECT * FROM dss_licences.v_etat_courant")) == 7
 
 
 def test_relance_meme_mois_idempotente():
     lancer()
     lancer()
-    assert sql("SELECT count(*) FROM dss_licences.fait_utilisateur_mois") == [(6,)]
+    assert sql("SELECT count(*) FROM dss_licences.fait_utilisateur_mois") == [(7,)]
     assert sql("SELECT count(*) FROM dss_licences.fait_anomalie_mois") == [(7,)]
 
 
@@ -122,7 +125,7 @@ def test_relance_autre_jour_du_mois_remplace_la_photo():
         "NULL, true, 10, 0, 0, 0)", (mois, mois))
     lancer()
     assert sql("SELECT count(*), max(date_extraction) FROM dss_licences.fait_utilisateur_mois "
-               "WHERE mois = %s", (mois,)) == [(6, AUJOURDHUI)]
+               "WHERE mois = %s", (mois,)) == [(7, AUJOURDHUI)]
     assert sql("SELECT DISTINCT mois FROM dss_licences.agg_licence_mois") == [(mois,)]
 
 
