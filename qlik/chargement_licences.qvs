@@ -2,8 +2,8 @@
 // =============================================================================
 // Suivi des licences Dataiku DSS - Script de chargement Qlik Sense
 // Source : PostgreSQL, schéma dss_licences (vues v_qlik_* + référentiels)
-// Rechargement : quotidien, après le scénario Dataiku
-// Volume : ~180 utilisateurs x 180 jours = ~32 000 lignes, rechargement complet
+// Rechargement : mensuel, après le scénario Dataiku (inutile de recharger plus souvent)
+// Volume : ~180 utilisateurs x 6 photos mensuelles = ~1 100 lignes, rechargement complet
 // =============================================================================
 SET ThousandSep=' ';
 SET DecimalSep=',';
@@ -49,10 +49,11 @@ SQL SELECT access, userid, code_ads FROM $(vSchema).v_qlik_acces;
 Section Application;
 
 ///$tab Faits
-// Photo quotidienne des utilisateurs (grain : utilisateur x jour)
+// Photo mensuelle des utilisateurs (grain : utilisateur x mois)
 F_UTILISATEUR:
 LOAD
-    AutoNumber(cle_util_jour, 'cle')                     AS %cle_util_jour,
+    AutoNumber(cle_util_mois, 'cle')                     AS %cle_util_mois,
+    $(fDate(mois))                                       AS mois,
     $(fDate(date_extraction))                            AS date_extraction,
     login,
     profil,
@@ -67,36 +68,36 @@ LOAD
     nb_ads,
     nb_types_licence,
     nb_anomalies;
-SQL SELECT * FROM $(vSchema).v_qlik_utilisateur_jour;
+SQL SELECT * FROM $(vSchema).v_qlik_utilisateur_mois;
 
-// Licences portées (grain : utilisateur x jour x ADS x type) - porte CODE_ADS
+// Licences portées (grain : utilisateur x mois x ADS x type) - porte CODE_ADS
 L_LICENCE:
 LOAD
-    AutoNumber(cle_util_jour, 'cle')   AS %cle_util_jour,
+    AutoNumber(cle_util_mois, 'cle')   AS %cle_util_mois,
     code_ads                           AS CODE_ADS,
     type_licence;
-SQL SELECT cle_util_jour, code_ads, type_licence FROM $(vSchema).v_qlik_licence_jour;
+SQL SELECT cle_util_mois, code_ads, type_licence FROM $(vSchema).v_qlik_licence_mois;
 
 F_ANOMALIE:
 LOAD
-    AutoNumber(cle_util_jour, 'cle')   AS %cle_util_jour,
+    AutoNumber(cle_util_mois, 'cle')   AS %cle_util_mois,
     code_anomalie,
     1                                  AS nb_anomalie;
-SQL SELECT cle_util_jour, code_anomalie FROM $(vSchema).v_qlik_anomalie_jour;
+SQL SELECT cle_util_mois, code_anomalie FROM $(vSchema).v_qlik_anomalie_mois;
 
 F_GROUPE:
 LOAD
-    AutoNumber(cle_util_jour, 'cle')   AS %cle_util_jour,
+    AutoNumber(cle_util_mois, 'cle')   AS %cle_util_mois,
     nom_groupe,
     est_groupe_licence;
-SQL SELECT cle_util_jour, nom_groupe, est_groupe_licence FROM $(vSchema).v_qlik_groupe_jour;
+SQL SELECT cle_util_mois, nom_groupe, est_groupe_licence FROM $(vSchema).v_qlik_groupe_mois;
 
 // Historique anonyme long terme (au-delà des 6 mois de rétention).
-// Relié au reste du modèle par CODE_ADS uniquement : utiliser hist_date et
+// Relié au reste du modèle par CODE_ADS uniquement : utiliser hist_mois et
 // hist_type_licence comme dimensions dans les graphiques d'historique.
 H_LICENCE:
 LOAD
-    $(fDate(date_extraction))      AS hist_date,
+    $(fDate(mois))                 AS hist_mois,
     code_ads                       AS CODE_ADS,
     type_licence                   AS hist_type_licence,
     nb_comptes                     AS hist_nb_comptes,
@@ -104,10 +105,10 @@ LOAD
     nb_actifs_inactifs             AS hist_nb_actifs_inactifs,
     nb_actifs_jamais_connectes     AS hist_nb_actifs_jamais_connectes,
     nb_actifs_en_anomalie          AS hist_nb_actifs_en_anomalie;
-SQL SELECT date_extraction, upper(code_ads) AS code_ads, type_licence, nb_comptes,
+SQL SELECT mois, upper(code_ads) AS code_ads, type_licence, nb_comptes,
            nb_comptes_actifs, nb_actifs_inactifs, nb_actifs_jamais_connectes,
            nb_actifs_en_anomalie
-      FROM $(vSchema).agg_licence_jour;
+      FROM $(vSchema).agg_licence_mois;
 
 ///$tab Dimensions
 D_UTILISATEUR:
@@ -144,23 +145,14 @@ LOAD
 SQL SELECT code_anomalie, libelle, gravite FROM $(vSchema).ref_anomalie;
 
 ///$tab Calendrier
-TMP_BORNES:
-LOAD Min(date_extraction) AS d_min, Max(date_extraction) AS d_max
-RESIDENT F_UTILISATEUR;
-LET vDateMin = Num(Peek('d_min', 0, 'TMP_BORNES'));
-LET vDateMax = Num(Peek('d_max', 0, 'TMP_BORNES'));
-DROP TABLE TMP_BORNES;
-
+// Calendrier mensuel : une ligne par mois de photo (mois = 1er jour du mois)
 CALENDRIER:
-LOAD
-    date_extraction,
-    Year(date_extraction)            AS annee,
-    MonthName(date_extraction)       AS annee_mois,
-    WeekName(date_extraction)        AS annee_semaine,
-    WeekDay(date_extraction)         AS jour_semaine;
-LOAD Date($(vDateMin) + IterNo() - 1) AS date_extraction
-AUTOGENERATE 1
-WHILE $(vDateMin) + IterNo() - 1 <= $(vDateMax);
+LOAD DISTINCT
+    mois,
+    Year(mois)                       AS annee,
+    MonthName(mois)                  AS annee_mois,
+    'T' & Ceil(Month(mois) / 3)      AS trimestre
+RESIDENT F_UTILISATEUR;
 
 ///$tab Variables
 // Seuil d'inactivité (affichage uniquement : est_inactif est calculé en base)
@@ -170,7 +162,7 @@ SQL SELECT valeur FROM $(vSchema).ref_parametre WHERE cle = 'seuil_inactivite_jo
 LET vSeuilInactivite = Peek('valeur', 0, 'TMP_PARAM');
 DROP TABLE TMP_PARAM;
 
-// Modificateur d'ensemble "dernière date sélectionnée", à combiner :
+// Modificateur d'ensemble "dernier mois sélectionné", à combiner :
 //   Count({<$(vDerniere), est_actif={1}>} DISTINCT login)
 // (le @ est remplacé par $ pour que l'expansion ait lieu dans les graphiques)
-LET vDerniere = Replace('date_extraction={"@(=Date(Max(date_extraction)))"}', '@', '$');
+LET vDerniere = Replace('mois={"@(=Date(Max(mois)))"}', '@', '$');

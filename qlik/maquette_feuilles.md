@@ -8,21 +8,22 @@ qui lui sont autorisées (section access sur `CODE_ADS`, alimentée par `ref_acc
 ```
                     D_UTILISATEUR ──login──┐
                                            │
-CALENDRIER ──date_extraction── F_UTILISATEUR ──%cle_util_jour──┬── L_LICENCE ──CODE_ADS──┬── D_ADS
-                                                               │        └──type_licence── D_TYPE_LICENCE
-                                                               ├── F_ANOMALIE ──code_anomalie── D_ANOMALIE
-                                                               └── F_GROUPE                     │
-                                                                          H_LICENCE ──CODE_ADS──┘
+CALENDRIER ──mois── F_UTILISATEUR ──%cle_util_mois──┬── L_LICENCE ──CODE_ADS──┬── D_ADS
+                                                    │        └──type_licence── D_TYPE_LICENCE
+                                                    ├── F_ANOMALIE ──code_anomalie── D_ANOMALIE
+                                                    └── F_GROUPE                     │
+                                                               H_LICENCE ──CODE_ADS──┘
 ```
 
 `H_LICENCE` est l'historique anonyme au-delà de 6 mois. Pour les graphiques d'historique,
-utiliser ses propres champs `hist_date` et `hist_type_licence` comme dimensions.
+utiliser ses propres champs `hist_mois` et `hist_type_licence` comme dimensions.
 
 ## Mesures de base (Master items)
 
-Par défaut, toutes les mesures portent sur la **dernière date sélectionnée** (`$(vDerniere)`).
-On voit l'état du jour sans avoir à choisir une date, et on peut remonter dans le temps en
-sélectionnant une autre date.
+Les données arrivent **une fois par mois** : une photo par mois, avec 6 photos nominatives
+conservées. Par défaut, toutes les mesures portent sur le **dernier mois sélectionné**
+(`$(vDerniere)`). On voit le dernier état sans avoir à choisir un mois, et on peut remonter
+dans le temps en sélectionnant un autre mois.
 
 | Mesure | Expression |
 |---|---|
@@ -34,14 +35,14 @@ sélectionnant une autre date.
 | Comptes en anomalie | `Count({<$(vDerniere), est_en_anomalie={1}>} DISTINCT login)` |
 | Nombre d'anomalies | `Sum({<$(vDerniere)>} nb_anomalie)` |
 | Taux de conformité | `1 - Count({<$(vDerniere), est_actif={1}, est_en_anomalie={1}>} DISTINCT login) / Count({<$(vDerniere), est_actif={1}>} DISTINCT login)` |
-| Actifs (évolution) | `Count({<est_actif={1}>} DISTINCT login)` avec `date_extraction` en dimension |
-| Dormants (évolution) | `Count({<est_inactif={1}>} DISTINCT login)` avec `date_extraction` en dimension |
+| Actifs (évolution) | `Count({<est_actif={1}>} DISTINCT login)` avec `annee_mois` en dimension |
+| Dormants (évolution) | `Count({<est_inactif={1}>} DISTINCT login)` avec `annee_mois` en dimension |
 
 Un utilisateur rattaché à plusieurs ADS (anomalie `MULTI_ADS`) est compté dans chacune d'elles.
 Le total d'un graphique par ADS peut donc dépasser le nombre de comptes.
 
 Volet de filtres présent sur toutes les feuilles : `ads_direction`, `ads_libelle`, `type_licence`,
-`profil`, `annee_mois`, `date_extraction`.
+`profil`, `annee_mois`.
 
 ---
 
@@ -58,8 +59,8 @@ Volet de filtres présent sur toutes les feuilles : `ads_direction`, `ads_libell
 │ Dim : ads_libelle / type_licence   │ Dim : type_licence                  │
 │ Mes : Comptes actifs avec licence  │ Mes : Comptes actifs avec licence   │
 ├────────────────────────────────────┴─────────────────────────────────────┤
-│ Évolution des comptes actifs et dormants (6 mois)                        │
-│ Courbe : Dim date_extraction ; Mes : Actifs (évolution), Dormants (évol.)│
+│ Évolution des comptes actifs et dormants (6 photos mensuelles)           │
+│ Courbe : Dim annee_mois ; Mes : Actifs (évolution), Dormants (évolution) │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -91,7 +92,7 @@ Volet de filtres présent sur toutes les feuilles : `ads_direction`, `ads_libell
 │                              │ → hors diagonale = incohérences           │
 ├──────────────────────────────┴───────────────────────────────────────────┤
 │ Évolution des anomalies (le nettoyage avance-t-il ?)                     │
-│ Barres empilées : Dim date_extraction / anomalie_libelle ;               │
+│ Barres empilées : Dim annee_mois / anomalie_gravite ;                    │
 │ Mes : Sum(nb_anomalie)                                                   │
 ├──────────────────────────────────────────────────────────────────────────┤
 │ Tableau détaillé : login, nom, anomalie_libelle, anomalie_gravite,       │
@@ -105,17 +106,16 @@ Volet de filtres présent sur toutes les feuilles : `ads_direction`, `ads_libell
 ```
 ┌─────────────────────────────────────┬────────────────────────────────────┐
 │ Comptes actifs par type (6 mois)    │ Créations de comptes par mois      │
-│ Courbes : Dim date_extraction,      │ Barres : Dim mois_creation         │
+│ Courbes : Dim annee_mois,           │ Barres : Dim mois_creation         │
 │ type_licence ; Mes : Actifs (évol.) │ Mes : Count(DISTINCT login)        │
 ├─────────────────────────────────────┴────────────────────────────────────┤
 │ Consommation par ADS et par mois                                         │
 │ Tableau croisé : Lignes ads_libelle ; Colonnes annee_mois ;              │
-│ Mes : moyenne quotidienne des comptes actifs avec licence =              │
-│  Count({<est_actif={1}, CODE_ADS-={'NON_ATTRIBUE'}>}                     │
-│        DISTINCT %cle_util_jour) / Count(DISTINCT date_extraction)        │
+│ Mes : comptes actifs avec licence (une photo par mois) =                 │
+│  Count({<est_actif={1}, CODE_ADS-={'NON_ATTRIBUE'}>} DISTINCT login)     │
 ├──────────────────────────────────────────────────────────────────────────┤
 │ Historique long terme (anonyme, au-delà de 6 mois)                       │
-│ Courbe : Dim hist_date, hist_type_licence ;                              │
+│ Courbe : Dim hist_mois, hist_type_licence ;                              │
 │ Mes : Sum(hist_nb_comptes_actifs), Sum(hist_nb_actifs_inactifs)          │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
@@ -127,7 +127,7 @@ Volet de filtres présent sur toutes les feuilles : `ads_direction`, `ads_libell
 │ Recherche :          │ Fiche : nom, email, source_compte, date_creation, │
 │ volet login / nom    │ profil, ADS, type_licence, dernière connexion     │
 ├──────────────────────┴───────────────────────────────────────────────────┤
-│ Historique de l'utilisateur : tableau date_extraction, est_actif,        │
+│ Historique de l'utilisateur : tableau annee_mois, est_actif,             │
 │ jours_sans_connexion, type_licence, CODE_ADS, anomalie_libelle           │
 ├──────────────────────────────────────────────────────────────────────────┤
 │ Groupes Dataiku : tableau nom_groupe, est_groupe_licence                 │

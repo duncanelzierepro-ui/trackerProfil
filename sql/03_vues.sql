@@ -1,19 +1,20 @@
 -- =============================================================================
 -- Vues de restitution pour Qlik Sense
 -- -----------------------------------------------------------------------------
--- cle_util_jour relie les faits entre eux dans Qlik (évite les clés synthétiques).
+-- cle_util_mois relie les faits entre eux dans Qlik (évite les clés synthétiques).
 -- Les indicateurs sont en 0/1 pour pouvoir être sommés directement.
 -- =============================================================================
 
--- Photo quotidienne des utilisateurs, enrichie des indicateurs métier
-CREATE OR REPLACE VIEW dss_licences.v_qlik_utilisateur_jour AS
+-- Photo mensuelle des utilisateurs, enrichie des indicateurs métier
+CREATE OR REPLACE VIEW dss_licences.v_qlik_utilisateur_mois AS
 WITH p AS (
     SELECT coalesce((SELECT valeur::integer FROM dss_licences.ref_parametre
                       WHERE cle = 'seuil_inactivite_jours'), 90) AS seuil
 ), m AS (
-    SELECT max(date_extraction) AS derniere FROM dss_licences.fait_utilisateur_jour
+    SELECT max(mois) AS dernier FROM dss_licences.fait_utilisateur_mois
 )
-SELECT f.date_extraction::text || '|' || f.login           AS cle_util_jour,
+SELECT f.mois::text || '|' || f.login                      AS cle_util_mois,
+       f.mois,
        f.date_extraction,
        f.login,
        f.profil,
@@ -21,7 +22,7 @@ SELECT f.date_extraction::text || '|' || f.login           AS cle_util_jour,
        (f.actif AND f.jours_sans_connexion > p.seuil)::int  AS est_inactif,
        f.jamais_connecte::int                               AS est_jamais_connecte,
        (f.nb_anomalies > 0)::int                            AS est_en_anomalie,
-       (f.date_extraction = m.derniere)::int                AS est_dernier_snapshot,
+       (f.mois = m.dernier)::int                            AS est_dernier_snapshot,
        f.date_derniere_connexion,
        f.jours_sans_connexion,
        CASE WHEN f.jamais_connecte               THEN 5
@@ -37,26 +38,26 @@ SELECT f.date_extraction::text || '|' || f.login           AS cle_util_jour,
        f.nb_ads,
        f.nb_types_licence,
        f.nb_anomalies
-  FROM dss_licences.fait_utilisateur_jour f
+  FROM dss_licences.fait_utilisateur_mois f
  CROSS JOIN p
  CROSS JOIN m;
 
-CREATE OR REPLACE VIEW dss_licences.v_qlik_licence_jour AS
-SELECT date_extraction::text || '|' || login AS cle_util_jour,
-       upper(code_ads)                       AS code_ads,
+CREATE OR REPLACE VIEW dss_licences.v_qlik_licence_mois AS
+SELECT mois::text || '|' || login AS cle_util_mois,
+       upper(code_ads)            AS code_ads,
        type_licence
-  FROM dss_licences.fait_licence_jour;
+  FROM dss_licences.fait_licence_mois;
 
-CREATE OR REPLACE VIEW dss_licences.v_qlik_groupe_jour AS
-SELECT date_extraction::text || '|' || login AS cle_util_jour,
+CREATE OR REPLACE VIEW dss_licences.v_qlik_groupe_mois AS
+SELECT mois::text || '|' || login  AS cle_util_mois,
        nom_groupe,
-       est_groupe_licence::int               AS est_groupe_licence
-  FROM dss_licences.fait_groupe_jour;
+       est_groupe_licence::int     AS est_groupe_licence
+  FROM dss_licences.fait_groupe_mois;
 
-CREATE OR REPLACE VIEW dss_licences.v_qlik_anomalie_jour AS
-SELECT date_extraction::text || '|' || login AS cle_util_jour,
+CREATE OR REPLACE VIEW dss_licences.v_qlik_anomalie_mois AS
+SELECT mois::text || '|' || login AS cle_util_mois,
        code_anomalie
-  FROM dss_licences.fait_anomalie_jour;
+  FROM dss_licences.fait_anomalie_mois;
 
 -- Section access Qlik : le joker '*' de ref_acces_qlik est développé en la
 -- liste explicite des ADS (dans Qlik, '*' ne couvre que les valeurs présentes
@@ -64,8 +65,8 @@ SELECT date_extraction::text || '|' || login AS cle_util_jour,
 CREATE OR REPLACE VIEW dss_licences.v_qlik_acces AS
 WITH toutes_ads AS (
     SELECT code_ads FROM dss_licences.ref_ads
-    UNION SELECT code_ads FROM dss_licences.fait_licence_jour
-    UNION SELECT code_ads FROM dss_licences.agg_licence_jour
+    UNION SELECT code_ads FROM dss_licences.fait_licence_mois
+    UNION SELECT code_ads FROM dss_licences.agg_licence_mois
 )
 SELECT upper(a.role) AS access, upper(a.user_id) AS userid, upper(a.code_ads) AS code_ads
   FROM dss_licences.ref_acces_qlik a
@@ -76,21 +77,22 @@ SELECT upper(a.role), upper(a.user_id), upper(t.code_ads)
  CROSS JOIN toutes_ads t
  WHERE a.code_ads = '*';
 
--- Vue de consultation SQL (hors Qlik) : état courant, une ligne par utilisateur
+-- Vue de consultation SQL (hors Qlik) : dernière photo, une ligne par utilisateur
 CREATE OR REPLACE VIEW dss_licences.v_etat_courant AS
 SELECT u.login, d.nom, d.email, u.profil, u.actif,
        u.date_derniere_connexion, u.jours_sans_connexion,
        (SELECT string_agg(DISTINCT l.code_ads, ', ' ORDER BY l.code_ads)
-          FROM dss_licences.fait_licence_jour l
-         WHERE l.date_extraction = u.date_extraction AND l.login = u.login)     AS ads,
+          FROM dss_licences.fait_licence_mois l
+         WHERE l.mois = u.mois AND l.login = u.login)                          AS ads,
        (SELECT string_agg(DISTINCT l.type_licence, ', ' ORDER BY l.type_licence)
-          FROM dss_licences.fait_licence_jour l
-         WHERE l.date_extraction = u.date_extraction AND l.login = u.login)     AS types_licence,
+          FROM dss_licences.fait_licence_mois l
+         WHERE l.mois = u.mois AND l.login = u.login)                          AS types_licence,
        (SELECT string_agg(r.libelle, ' | ' ORDER BY r.gravite DESC, r.libelle)
-          FROM dss_licences.fait_anomalie_jour a
+          FROM dss_licences.fait_anomalie_mois a
           JOIN dss_licences.ref_anomalie r USING (code_anomalie)
-         WHERE a.date_extraction = u.date_extraction AND a.login = u.login)     AS anomalies,
+         WHERE a.mois = u.mois AND a.login = u.login)                          AS anomalies,
+       u.mois,
        u.date_extraction
-  FROM dss_licences.fait_utilisateur_jour u
+  FROM dss_licences.fait_utilisateur_mois u
   JOIN dss_licences.dim_utilisateur d USING (login)
- WHERE u.date_extraction = (SELECT max(date_extraction) FROM dss_licences.fait_utilisateur_jour);
+ WHERE u.mois = (SELECT max(mois) FROM dss_licences.fait_utilisateur_mois);

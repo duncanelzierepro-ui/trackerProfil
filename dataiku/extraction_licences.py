@@ -1,11 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-Recette Python Dataiku : photo quotidienne des licences DSS -> PostgreSQL.
+Recette Python Dataiku : photo mensuelle des licences DSS -> PostgreSQL.
+À lancer par un scénario mensuel (par ex. le 1er du mois).
 
 Sorties (datasets Dataiku sur la connexion PostgreSQL, schéma SCHEMA_PG) :
     stg_utilisateur, stg_licence, stg_groupe, stg_anomalie
 Les tables stg_* sont écrasées à chaque exécution puis la procédure
-p_charger_snapshot() les historise dans les tables fait_* ; p_purger_rgpd()
+p_charger_snapshot() les historise dans les tables fait_*_mois (une
+relance dans le même mois remplace la photo du mois) ; p_purger_rgpd()
 supprime ensuite les données nominatives au-delà de la rétention.
 """
 import dataiku
@@ -195,4 +197,4 @@ executor.query_to_df(
                  f"CALL {SCHEMA_PG}.p_purger_rgpd()"],
     post_queries=["COMMIT"],
 )
-print(f"Photo du {d} historisée dans {SCHEMA_PG}")
+print(f"Photo du mois (extraction du {d}) historisée dans {SCHEMA_PG}")

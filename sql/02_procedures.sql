@@ -1,18 +1,21 @@
 -- =============================================================================
 -- Procédures de chargement et de purge
 -- -----------------------------------------------------------------------------
--- Appelées par la recette Python Dataiku après écriture des tables stg_* :
+-- Appelées par la recette Python Dataiku (scénario mensuel) après écriture
+-- des tables stg_* :
 --   CALL dss_licences.p_charger_snapshot();
 --   CALL dss_licences.p_purger_rgpd();
 -- =============================================================================
 
--- Charge la photo du jour depuis les tables de transit stg_* vers les faits.
--- Idempotent : relancer le même jour remplace la photo de ce jour.
+-- Charge la photo du mois depuis les tables de transit stg_* vers les faits.
+-- Idempotent : relancer dans le même mois (même un autre jour) remplace la
+-- photo de ce mois.
 CREATE OR REPLACE PROCEDURE dss_licences.p_charger_snapshot()
 LANGUAGE plpgsql
 AS $$
 DECLARE
     v_date      date;
+    v_mois      date;
     v_nb        integer;
     v_nb_dates  integer;
     v_seuil     integer;
@@ -27,14 +30,15 @@ BEGIN
     IF v_nb_dates > 1 THEN
         RAISE EXCEPTION 'stg_utilisateur contient % dates d''extraction différentes', v_nb_dates;
     END IF;
+    v_mois := date_trunc('month', v_date)::date;
 
     SELECT valeur::integer INTO v_seuil
       FROM dss_licences.ref_parametre WHERE cle = 'seuil_inactivite_jours';
     v_seuil := coalesce(v_seuil, 90);
 
-    -- Suppression de la photo du jour (cascade sur licences, groupes, anomalies)
-    DELETE FROM dss_licences.fait_utilisateur_jour WHERE date_extraction = v_date;
-    DELETE FROM dss_licences.agg_licence_jour      WHERE date_extraction = v_date;
+    -- Suppression de la photo du mois (cascade sur licences, groupes, anomalies)
+    DELETE FROM dss_licences.fait_utilisateur_mois WHERE mois = v_mois;
+    DELETE FROM dss_licences.agg_licence_mois      WHERE mois = v_mois;
 
     -- Dimension utilisateur : insertion ou mise à jour
     INSERT INTO dss_licences.dim_utilisateur AS d
@@ -51,51 +55,52 @@ BEGIN
            date_premiere_extraction = LEAST(d.date_premiere_extraction, EXCLUDED.date_premiere_extraction),
            date_derniere_extraction = GREATEST(d.date_derniere_extraction, EXCLUDED.date_derniere_extraction);
 
-    INSERT INTO dss_licences.fait_utilisateur_jour
-           (date_extraction, login, profil, actif, date_derniere_connexion,
+    INSERT INTO dss_licences.fait_utilisateur_mois
+           (mois, date_extraction, login, profil, actif, date_derniere_connexion,
             jamais_connecte, jours_sans_connexion, nb_ads, nb_types_licence, nb_anomalies)
-    SELECT v_date, login, nullif(profil, ''), actif::boolean,
+    SELECT v_mois, v_date, login, nullif(profil, ''), actif::boolean,
            date_derniere_connexion::date, jamais_connecte::boolean,
            jours_sans_connexion::integer, nb_ads::smallint,
            nb_types_licence::smallint, nb_anomalies::smallint
       FROM dss_licences.stg_utilisateur;
 
-    INSERT INTO dss_licences.fait_licence_jour (date_extraction, login, code_ads, type_licence)
-    SELECT DISTINCT v_date, login, code_ads, type_licence
+    INSERT INTO dss_licences.fait_licence_mois (mois, login, code_ads, type_licence)
+    SELECT DISTINCT v_mois, login, code_ads, type_licence
       FROM dss_licences.stg_licence;
 
-    INSERT INTO dss_licences.fait_groupe_jour (date_extraction, login, nom_groupe, est_groupe_licence)
-    SELECT DISTINCT v_date, login, nom_groupe, est_groupe_licence::boolean
+    INSERT INTO dss_licences.fait_groupe_mois (mois, login, nom_groupe, est_groupe_licence)
+    SELECT DISTINCT v_mois, login, nom_groupe, est_groupe_licence::boolean
       FROM dss_licences.stg_groupe;
 
-    INSERT INTO dss_licences.fait_anomalie_jour (date_extraction, login, code_anomalie)
-    SELECT DISTINCT v_date, login, code_anomalie
+    INSERT INTO dss_licences.fait_anomalie_mois (mois, login, code_anomalie)
+    SELECT DISTINCT v_mois, login, code_anomalie
       FROM dss_licences.stg_anomalie;
 
     -- Agrégat anonyme conservé au-delà de la rétention RGPD
-    INSERT INTO dss_licences.agg_licence_jour
-           (date_extraction, code_ads, type_licence, nb_comptes, nb_comptes_actifs,
+    INSERT INTO dss_licences.agg_licence_mois
+           (mois, date_extraction, code_ads, type_licence, nb_comptes, nb_comptes_actifs,
             nb_actifs_inactifs, nb_actifs_jamais_connectes, nb_actifs_en_anomalie,
             seuil_inactivite_jours)
-    SELECT l.date_extraction, l.code_ads, l.type_licence,
+    SELECT l.mois, v_date, l.code_ads, l.type_licence,
            count(*),
            count(*) FILTER (WHERE u.actif),
            count(*) FILTER (WHERE u.actif AND u.jours_sans_connexion > v_seuil),
            count(*) FILTER (WHERE u.actif AND u.jamais_connecte),
            count(*) FILTER (WHERE u.actif AND u.nb_anomalies > 0),
            v_seuil
-      FROM dss_licences.fait_licence_jour l
-      JOIN dss_licences.fait_utilisateur_jour u USING (date_extraction, login)
-     WHERE l.date_extraction = v_date
-     GROUP BY l.date_extraction, l.code_ads, l.type_licence;
+      FROM dss_licences.fait_licence_mois l
+      JOIN dss_licences.fait_utilisateur_mois u USING (mois, login)
+     WHERE l.mois = v_mois
+     GROUP BY l.mois, l.code_ads, l.type_licence;
 
-    RAISE NOTICE 'Photo du % chargée : % utilisateurs', v_date, v_nb;
+    RAISE NOTICE 'Photo de % (extraction du %) chargée : % utilisateurs',
+                 to_char(v_mois, 'MM/YYYY'), v_date, v_nb;
 END;
 $$;
 
 
--- Purge RGPD : supprime les données nominatives au-delà de la rétention
--- (paramètre retention_mois, 6 par défaut). L'agrégat anonyme est conservé.
+-- Purge RGPD : supprime les données nominatives extraites il y a plus de
+-- retention_mois mois (6 par défaut). L'agrégat anonyme est conservé.
 CREATE OR REPLACE PROCEDURE dss_licences.p_purger_rgpd()
 LANGUAGE plpgsql
 AS $$
@@ -109,8 +114,8 @@ BEGIN
       FROM dss_licences.ref_parametre WHERE cle = 'retention_mois';
     v_limite := (current_date - make_interval(months => coalesce(v_mois, 6)))::date;
 
-    -- Cascade sur fait_licence_jour, fait_groupe_jour, fait_anomalie_jour
-    DELETE FROM dss_licences.fait_utilisateur_jour WHERE date_extraction < v_limite;
+    -- Cascade sur fait_licence_mois, fait_groupe_mois, fait_anomalie_mois
+    DELETE FROM dss_licences.fait_utilisateur_mois WHERE date_extraction < v_limite;
     GET DIAGNOSTICS v_faits = ROW_COUNT;
 
     -- Utilisateurs absents de toutes les extractions depuis la limite
