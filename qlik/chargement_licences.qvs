@@ -1,0 +1,176 @@
+///$tab Main
+// =============================================================================
+// Suivi des licences Dataiku DSS - Script de chargement Qlik Sense
+// Source : PostgreSQL, schéma dss_licences (vues v_qlik_* + référentiels)
+// Rechargement : quotidien, après le scénario Dataiku
+// Volume : ~180 utilisateurs x 180 jours = ~32 000 lignes, rechargement complet
+// =============================================================================
+SET ThousandSep=' ';
+SET DecimalSep=',';
+SET MoneyThousandSep=' ';
+SET MoneyDecimalSep=',';
+SET MoneyFormat='# ##0,00 €;-# ##0,00 €';
+SET TimeFormat='hh:mm:ss';
+SET DateFormat='DD/MM/YYYY';
+SET TimestampFormat='DD/MM/YYYY hh:mm:ss[.fff]';
+SET FirstWeekDay=0;
+SET BrokenWeeks=0;
+SET ReferenceDay=4;
+SET FirstMonthOfYear=1;
+SET CollationLocale='fr-FR';
+SET MonthNames='janv.;févr.;mars;avr.;mai;juin;juil.;août;sept.;oct.;nov.;déc.';
+SET DayNames='lun.;mar.;mer.;jeu.;ven.;sam.;dim.';
+
+SET vSchema = 'dss_licences';
+// Date robuste : valeur numérique renvoyée par le connecteur, sinon texte ISO
+SET fDate = Date(Alt($1, Date#($1, 'YYYY-MM-DD')));
+
+LIB CONNECT TO 'PostgreSQL_Licences';   // À ADAPTER : nom de la connexion de données Qlik
+
+///$tab Section Access
+// -----------------------------------------------------------------------------
+// Restriction par ADS. Le champ de réduction CODE_ADS doit être en MAJUSCULES
+// (nom et valeurs). Garder une copie de l'application avant la 1re activation :
+// un utilisateur absent de cette table n'a plus accès à l'application.
+// -----------------------------------------------------------------------------
+Section Access;
+ACCES:
+LOAD * INLINE [
+ACCESS, USERID, CODE_ADS
+ADMIN, INTERNAL\SA_SCHEDULER, *
+];
+
+Concatenate (ACCES)
+LOAD
+    access   AS ACCESS,
+    userid   AS USERID,
+    code_ads AS CODE_ADS;
+SQL SELECT access, userid, code_ads FROM $(vSchema).v_qlik_acces;
+Section Application;
+
+///$tab Faits
+// Photo quotidienne des utilisateurs (grain : utilisateur x jour)
+F_UTILISATEUR:
+LOAD
+    AutoNumber(cle_util_jour, 'cle')                     AS %cle_util_jour,
+    $(fDate(date_extraction))                            AS date_extraction,
+    login,
+    profil,
+    est_actif,
+    est_inactif,
+    est_jamais_connecte,
+    est_en_anomalie,
+    est_dernier_snapshot,
+    $(fDate(date_derniere_connexion))                    AS date_derniere_connexion,
+    jours_sans_connexion,
+    Dual(tranche_inactivite, tranche_inactivite_ordre)   AS tranche_inactivite,
+    nb_ads,
+    nb_types_licence,
+    nb_anomalies;
+SQL SELECT * FROM $(vSchema).v_qlik_utilisateur_jour;
+
+// Licences portées (grain : utilisateur x jour x ADS x type) - porte CODE_ADS
+L_LICENCE:
+LOAD
+    AutoNumber(cle_util_jour, 'cle')   AS %cle_util_jour,
+    code_ads                           AS CODE_ADS,
+    type_licence;
+SQL SELECT cle_util_jour, code_ads, type_licence FROM $(vSchema).v_qlik_licence_jour;
+
+F_ANOMALIE:
+LOAD
+    AutoNumber(cle_util_jour, 'cle')   AS %cle_util_jour,
+    code_anomalie,
+    1                                  AS nb_anomalie;
+SQL SELECT cle_util_jour, code_anomalie FROM $(vSchema).v_qlik_anomalie_jour;
+
+F_GROUPE:
+LOAD
+    AutoNumber(cle_util_jour, 'cle')   AS %cle_util_jour,
+    nom_groupe,
+    est_groupe_licence;
+SQL SELECT cle_util_jour, nom_groupe, est_groupe_licence FROM $(vSchema).v_qlik_groupe_jour;
+
+// Historique anonyme long terme (au-delà des 6 mois de rétention).
+// Relié au reste du modèle par CODE_ADS uniquement : utiliser hist_date et
+// hist_type_licence comme dimensions dans les graphiques d'historique.
+H_LICENCE:
+LOAD
+    $(fDate(date_extraction))      AS hist_date,
+    code_ads                       AS CODE_ADS,
+    type_licence                   AS hist_type_licence,
+    nb_comptes                     AS hist_nb_comptes,
+    nb_comptes_actifs              AS hist_nb_comptes_actifs,
+    nb_actifs_inactifs             AS hist_nb_actifs_inactifs,
+    nb_actifs_jamais_connectes     AS hist_nb_actifs_jamais_connectes,
+    nb_actifs_en_anomalie          AS hist_nb_actifs_en_anomalie;
+SQL SELECT date_extraction, upper(code_ads) AS code_ads, type_licence, nb_comptes,
+           nb_comptes_actifs, nb_actifs_inactifs, nb_actifs_jamais_connectes,
+           nb_actifs_en_anomalie
+      FROM $(vSchema).agg_licence_jour;
+
+///$tab Dimensions
+D_UTILISATEUR:
+LOAD
+    login,
+    nom,
+    email,
+    source                          AS source_compte,
+    $(fDate(date_creation))         AS date_creation,
+    MonthName($(fDate(date_creation))) AS mois_creation;
+SQL SELECT login, nom, email, source, date_creation FROM $(vSchema).dim_utilisateur;
+
+D_ADS:
+LOAD
+    code_ads                        AS CODE_ADS,
+    libelle                         AS ads_libelle,
+    direction                       AS ads_direction,
+    responsable                     AS ads_responsable;
+SQL SELECT upper(code_ads) AS code_ads, libelle, direction, responsable
+      FROM $(vSchema).ref_ads;
+
+D_TYPE_LICENCE:
+LOAD
+    type_licence,
+    libelle                         AS type_licence_libelle,
+    valide                          AS type_licence_valide;
+SQL SELECT type_licence, libelle, valide::int AS valide FROM $(vSchema).ref_type_licence;
+
+D_ANOMALIE:
+LOAD
+    code_anomalie,
+    libelle                         AS anomalie_libelle,
+    Dual(Pick(gravite, 'Info', 'À corriger', 'Critique'), gravite) AS anomalie_gravite;
+SQL SELECT code_anomalie, libelle, gravite FROM $(vSchema).ref_anomalie;
+
+///$tab Calendrier
+TMP_BORNES:
+LOAD Min(date_extraction) AS d_min, Max(date_extraction) AS d_max
+RESIDENT F_UTILISATEUR;
+LET vDateMin = Num(Peek('d_min', 0, 'TMP_BORNES'));
+LET vDateMax = Num(Peek('d_max', 0, 'TMP_BORNES'));
+DROP TABLE TMP_BORNES;
+
+CALENDRIER:
+LOAD
+    date_extraction,
+    Year(date_extraction)            AS annee,
+    MonthName(date_extraction)       AS annee_mois,
+    WeekName(date_extraction)        AS annee_semaine,
+    WeekDay(date_extraction)         AS jour_semaine;
+LOAD Date($(vDateMin) + IterNo() - 1) AS date_extraction
+AUTOGENERATE 1
+WHILE $(vDateMin) + IterNo() - 1 <= $(vDateMax);
+
+///$tab Variables
+// Seuil d'inactivité (affichage uniquement : est_inactif est calculé en base)
+TMP_PARAM:
+LOAD valeur;
+SQL SELECT valeur FROM $(vSchema).ref_parametre WHERE cle = 'seuil_inactivite_jours';
+LET vSeuilInactivite = Peek('valeur', 0, 'TMP_PARAM');
+DROP TABLE TMP_PARAM;
+
+// Modificateur d'ensemble "dernière date sélectionnée", à combiner :
+//   Count({<$(vDerniere), est_actif={1}>} DISTINCT login)
+// (le @ est remplacé par $ pour que l'expansion ait lieu dans les graphiques)
+LET vDerniere = Replace('date_extraction={"@(=Date(Max(date_extraction)))"}', '@', '$');
